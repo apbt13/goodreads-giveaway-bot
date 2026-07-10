@@ -3,12 +3,17 @@
 The code is identical to the Mac version. You only redo the environment setup and
 log in fresh. **Bring `entered.json` over** so it doesn't re-enter what's already done.
 
-## What to copy from the Mac
-Copy these into a folder on the PC (e.g. `C:\Users\<you>\goodreads-giveaways\`):
-- `giveaways.py`, `config.yaml`, `requirements.txt`, `sweep_loop.ps1`, `WINDOWS.md`
-- **`entered.json`**  <- important: the dedupe log, so it continues instead of restarting
-
-Do NOT copy `browser-profile/` (re-login below) or `.venv/` (rebuilt below).
+## Get the code (first time)
+The project lives in the private repo `apbt13/goodreads-giveaway-bot`, which already
+includes `entered.json` (the dedupe log) so it continues instead of restarting.
+```powershell
+# One-time GitHub auth on this PC (opens a browser to sign in):
+gh auth login            # pick: GitHub.com  ->  HTTPS  ->  Login with a web browser
+gh repo clone apbt13/goodreads-giveaway-bot
+cd goodreads-giveaway-bot
+```
+`browser-profile/` (your login) is per-machine and NOT in the repo — you create it in
+the `login` step below. `.venv/` is rebuilt below too.
 
 ## One-time setup (PowerShell)
 ```powershell
