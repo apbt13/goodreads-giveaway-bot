@@ -1,0 +1,9 @@
+# machine-specific — never commit
+browser-profile/
+.venv/
+sweep.log
+__pycache__/
+*.pyc
+
+# entered.json IS tracked on purpose: it's the dedupe log, so cloning onto
+# another machine continues from the same state instead of re-entering.

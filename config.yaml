@@ -1,0 +1,51 @@
+# ---------------------------------------------------------------------------
+# What counts as "interesting". Edit freely — this is the whole brain of the tool.
+# A giveaway is entered only if it PASSES THE FORMAT GATE *and* IS INTERESTING.
+# ---------------------------------------------------------------------------
+
+# BLOCKLIST model: enter EVERYTHING except what's listed here.
+# Empty a list to exclude nothing in that category.
+filters:
+  # Skip giveaways whose genre tags contain any of these (case-insensitive
+  # substring, so "children" also catches "Childrens", "Children's Fiction").
+  exclude_genres:
+    - children
+    - christian
+    - parenting
+
+  # Skip if any of these appear in the title or blurb. Extra escape hatch for
+  # stuff the genre tags miss. Leave empty if you don't need it.
+  exclude_keywords: []
+
+  # Skip these formats. "kindle" = Kindle ebook. Anything not excluded (print,
+  # or format we couldn't detect) still qualifies.
+  exclude_formats:
+    - kindle
+
+scan:
+  # Listing page(s) to pull candidate giveaways from. One sort covers the whole
+  # pool (~1,600 giveaways) — add more sorts only if you want different ordering.
+  start_urls:
+    # ending_soon is the only list that pages through the ENTIRE pool via
+    # "Show more"; featured/default plateau at ~170. Sorted by end date, so
+    # giveaways closing soonest get entered first — exactly what we want.
+    - https://www.goodreads.com/giveaway?sort=ending_soon
+  max_clicks: 60        # ~15 giveaways/click => ~900 candidates, sorted by urgency
+                        # (more than a night can enter at safe pacing; raise for more)
+  max_giveaways: 2000   # hard cap on giveaways collected per run
+
+pacing:
+  # Random human-like delay (seconds) between opening pages / clicking Enter.
+  # Keep this comfortably slow — it's both politer and less bot-flaggy.
+  min_seconds: 4
+  max_seconds: 11
+
+run:
+  # false = DRY RUN: finds matches and locates the Enter button, but never clicks.
+  # Flip to true only once you've watched a few dry runs pick correctly.
+  live: false
+
+  # Max NEW entries per sweep (already-entered books don't count). Keeps each
+  # overnight pass bounded; the backlog is chewed through across repeated sweeps.
+  # 0 = no limit. A --limit flag overrides this.
+  max_per_sweep: 0
