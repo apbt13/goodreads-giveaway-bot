@@ -5,5 +5,12 @@ sweep.log
 __pycache__/
 *.pyc
 
-# entered.json IS tracked on purpose: it's the dedupe log, so cloning onto
-# another machine continues from the same state instead of re-entering.
+# per-user — each person generates their own; not shared in the repo.
+# config.yaml  : your genres/formats/limits (from `setup`). Template: config.example.yaml
+# entered.json : your personal dedupe log of what YOU have entered (created on first run)
+config.yaml
+entered.json
+
+# NOTE: if you clone this onto several of YOUR OWN machines and want them to share one
+# dedupe log, force-add your own file: `git add -f entered.json`. Don't commit it to a
+# repo you share with other people.

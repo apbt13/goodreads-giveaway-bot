@@ -3,8 +3,13 @@
 Goodreads giveaway auto-enter.
 
 Commands:
-  python giveaways.py login    Open a browser so you can log in once. The session
-                               is saved to ./browser-profile and reused after that.
+  python giveaways.py setup    Interactive first-time setup. Asks which genres you
+                               want and how many to enter per session, then writes
+                               config.yaml. Run this (or let your AI agent write
+                               config.yaml) before anything else.
+  python giveaways.py login    Open a browser so you can log in once (Amazon or
+                               email/password). The session is saved to
+                               ./browser-profile and reused after that.
   python giveaways.py scan     Scrape + filter giveaways and print what matches.
                                Never clicks anything. Use this to tune config.yaml.
   python giveaways.py run      Scrape + filter, then ENTER matching giveaways.
@@ -34,6 +39,7 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 HERE = os.path.dirname(os.path.abspath(__file__))
 PROFILE_DIR = os.path.join(HERE, "browser-profile")
 CONFIG_PATH = os.path.join(HERE, "config.yaml")
+CONFIG_EXAMPLE_PATH = os.path.join(HERE, "config.example.yaml")
 ENTERED_PATH = os.path.join(HERE, "entered.json")
 
 SHOW_RE = re.compile(r"/giveaway/show/(\d+)")
@@ -48,8 +54,76 @@ ENTERED_MARKERS = ("you are entered", "you have entered", "edit entry info",
 # small helpers
 # --------------------------------------------------------------------------- #
 def load_config():
+    if not os.path.exists(CONFIG_PATH):
+        print("No config.yaml yet. Create one first:\n"
+              "  python giveaways.py setup      (interactive)\n"
+              "  — or copy config.example.yaml to config.yaml and edit it.")
+        sys.exit(1)
     with open(CONFIG_PATH) as f:
         return yaml.safe_load(f)
+
+
+# --------------------------------------------------------------------------- #
+# config generation (setup)
+# --------------------------------------------------------------------------- #
+def _yaml_list(items):
+    """Render a YAML list value: inline `[]` when empty, else block bullets."""
+    if not items:
+        return " []"
+    return "\n" + "\n".join(f"  - {i}" for i in items)
+
+
+CONFIG_TEMPLATE = """\
+# ===========================================================================
+# Goodreads giveaway auto-enter — your settings.
+# Written by `python giveaways.py setup` (or your AI agent). Hand-edit anytime.
+# ===========================================================================
+
+# This tool enters PRINT giveaways only (mailed physical books). Your Goodreads
+# account needs a saved US shipping address. Kindle giveaways use a different
+# entry flow (Amazon account linking) and are skipped automatically.
+
+# Genres you WANT to enter. A giveaway matches if any of its Goodreads genre
+# tags contains any term below (case-insensitive substring — "fantasy" also
+# matches "Epic Fantasy"). Leave the list EMPTY to enter EVERY genre.
+include_genres:{genres}
+
+# Optional veto: skip a giveaway if any term appears in its title, blurb, or
+# genre tags — even if it matched above. Leave empty to disable.
+exclude_keywords: []
+
+scan:
+  # Listing page(s) to pull candidates from. `?sort=ending_soon` is the only
+  # sort that pages through the FULL pool (others plateau at ~170), and it
+  # enters soonest-closing giveaways first.
+  start_urls:
+    - https://www.goodreads.com/giveaway?sort=ending_soon
+  max_clicks: 60        # ~15 giveaways per "Show more" click
+  max_giveaways: 2000   # hard cap on candidates collected per run
+
+pacing:
+  # Random human-like delay (seconds) between page loads / clicks. Keep it slow:
+  # it's politer and less likely to be flagged as a bot.
+  min_seconds: 4
+  max_seconds: 11
+
+run:
+  # false = DRY RUN (finds the Enter button, never clicks). Flip to true only
+  # after you've watched a dry run pick correctly. `--live` overrides this.
+  live: false
+
+  # Max NEW entries per session (already-entered books don't count). 999 is the
+  # recommended default - effectively "enter everything available this session".
+  # Lower it while you build trust; a `--limit N` flag overrides it.
+  max_per_sweep: {max_per_sweep}
+"""
+
+
+def render_config(include_genres, max_per_sweep):
+    return CONFIG_TEMPLATE.format(
+        genres=_yaml_list(include_genres),
+        max_per_sweep=max_per_sweep,
+    )
 
 
 def load_entered():
@@ -193,26 +267,32 @@ def scrape_giveaway(page, url):
 # --------------------------------------------------------------------------- #
 # filtering
 # --------------------------------------------------------------------------- #
-def is_interesting(g, filters):
-    """Blocklist model: enter everything EXCEPT excluded formats/genres/keywords."""
-    ex_formats = [s.lower() for s in (filters.get("exclude_formats") or [])]
-    if g["format"] in ex_formats:
-        return False, f"excluded format: {g['format']}"
+def is_interesting(g, cfg):
+    """Enter a print giveaway if it matches the wanted genres, unless an
+    exclude_keyword vetoes it.
 
-    ex_genres = [s.lower() for s in (filters.get("exclude_genres") or [])]
+    - format: PRINT only. Kindle is skipped (different, unsupported entry flow).
+      A giveaway whose format we couldn't read ("unknown") still qualifies — the
+      print flow self-gates on the shipping-address step anyway.
+    - include_genres: allowlist. EMPTY means "every genre" (no genre filter).
+    - exclude_keywords: veto that runs last, against title + blurb + genres.
+    """
+    if g["format"] == "kindle":
+        return False, "kindle (print-only tool)"
+
     genre_blob = " ".join(g["genres"]).lower()
-    for term in ex_genres:
-        if term in genre_blob:
-            return False, f"excluded genre (~{term})"
+    include = [s.lower() for s in (cfg.get("include_genres") or [])]
+    if include and not any(term in genre_blob for term in include):
+        return False, "no wanted genre"
 
-    # keywords match title + blurb only (not the whole page's chrome).
-    ex_keywords = [s.lower() for s in (filters.get("exclude_keywords") or [])]
-    text_blob = (g["title"] + " " + g.get("description", "")).lower()
+    # keywords match title + blurb + genres.
+    ex_keywords = [s.lower() for s in (cfg.get("exclude_keywords") or [])]
+    text_blob = (g["title"] + " " + g.get("description", "") + " " + genre_blob).lower()
     for term in ex_keywords:
         if term in text_blob:
             return False, f"excluded keyword (~{term})"
 
-    return True, "not excluded"
+    return True, "matches"
 
 
 # --------------------------------------------------------------------------- #
@@ -277,11 +357,12 @@ def _submit_entry(page, cfg):
     Only ever touches the giveaway's own terms checkbox (#termsCheckBox) and the
     final "Enter Giveaway" submit — never the favorite-genre preference boxes.
     """
-    # Kindle giveaways use a different flow and are excluded by policy. If format
-    # detection missed one (no clean "Format:" field), we still bail here rather
-    # than enter it. Clicking Enter only navigated here — it did not enter you.
+    # Kindle giveaways use a different flow (Amazon account linking) we don't
+    # support. If format detection missed one (no clean "Format:" field) and Enter
+    # led here, bail without entering. Clicking Enter only navigated here — it did
+    # not enter you.
     if "enter_kindle_giveaway" in page.url:
-        return "skipped_kindle", "Kindle giveaway — skipped (slipped the format gate)"
+        return "skipped_kindle", "Kindle giveaway — skipped (print-only tool)"
 
     # Step: address chooser -> "Select this address"
     if "enter_choose_address" in page.url:
@@ -321,6 +402,46 @@ def _submit_entry(page, cfg):
 # --------------------------------------------------------------------------- #
 # commands
 # --------------------------------------------------------------------------- #
+def cmd_setup(args):
+    """Interactive first-run setup. Writes config.yaml. Safe to re-run anytime."""
+    print("Goodreads giveaway — setup\n"
+          "Answer two questions; this writes config.yaml. Re-run it anytime.\n"
+          "(This tool enters PRINT giveaways only — you'll need a saved US shipping\n"
+          " address on your Goodreads account.)\n")
+
+    if os.path.exists(CONFIG_PATH):
+        ans = input("config.yaml already exists. Overwrite it? [y/N] ").strip().lower()
+        if ans not in ("y", "yes"):
+            print("Left config.yaml unchanged.")
+            return
+
+    print("1) Which genres do you want to enter into?")
+    print("   Comma-separated, e.g.  fantasy, science fiction, mystery")
+    print("   Leave BLANK to enter EVERY genre.")
+    raw = input("   Genres: ").strip()
+    genres = [g.strip() for g in raw.split(",") if g.strip()]
+
+    print("\n2) Max NEW entries per session? Recommended: 999")
+    mraw = input("   Max [999]: ").strip()
+    try:
+        max_per = int(mraw) if mraw else 999
+    except ValueError:
+        max_per = 999
+    if max_per < 1:
+        max_per = 999
+
+    with open(CONFIG_PATH, "w") as f:
+        f.write(render_config(genres, max_per))
+
+    print("\nWrote config.yaml:")
+    print(f"  genres  : {', '.join(genres) if genres else 'ALL genres'}")
+    print(f"  per run : {max_per}")
+    print("\nNext:\n"
+          "  python giveaways.py login   # sign in to Goodreads once\n"
+          "  python giveaways.py scan    # preview matches (clicks nothing)\n"
+          "  python giveaways.py run     # dry run; add --live to enter for real")
+
+
 def cmd_login(args):
     with sync_playwright() as pw:
         ctx = pw.chromium.launch_persistent_context(
@@ -328,7 +449,8 @@ def cmd_login(args):
         )
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         page.goto("https://www.goodreads.com/user/sign_in")
-        print("\nA browser opened. Log in to Goodreads (via Amazon) in that window.")
+        print("\nA browser opened. Log in to Goodreads in that window — use whichever")
+        print("you have: 'Sign in with Amazon', or a Goodreads email + password.")
         print("When you can see your logged-in Goodreads home page, come back here")
         input("and press ENTER to save the session… ")
         ctx.close()
@@ -361,7 +483,7 @@ def cmd_scan(args):
             except Exception as e:
                 print(f"  ! {url}: {e}")
                 continue
-            ok, why = is_interesting(g, cfg["filters"])
+            ok, why = is_interesting(g, cfg)
             flag = "MATCH " if ok else "  skip"
             gtxt = ", ".join(g["genres"][:4]) if g["genres"] else "— none scraped —"
             title = g["title"].replace("Book giveaway for ", "")
@@ -405,7 +527,7 @@ def cmd_run(args):
             # and keep going. scrape + filter + enter are all inside the guard.
             try:
                 g = scrape_giveaway(page, url)
-                ok, why = is_interesting(g, cfg["filters"])
+                ok, why = is_interesting(g, cfg)
                 if not ok:
                     continue
                 status, note = enter_giveaway(page, cfg, dry_run)
@@ -434,6 +556,7 @@ def main():
     p = argparse.ArgumentParser(description="Goodreads giveaway auto-enter")
     sub = p.add_subparsers(dest="cmd", required=True)
 
+    sub.add_parser("setup", help="Interactive first-time setup; writes config.yaml")
     sub.add_parser("login", help="Log in once; save the browser session")
 
     ps = sub.add_parser("scan", help="Scrape + filter, print matches (never clicks)")
@@ -446,11 +569,13 @@ def main():
     pr.add_argument("--limit", type=int, default=0)
 
     args = p.parse_args()
-    if not os.path.exists(PROFILE_DIR) and args.cmd != "login":
+    # login/setup don't need a saved session; scan/run do.
+    if args.cmd in ("scan", "run") and not os.path.exists(PROFILE_DIR):
         print("No saved session yet. Run:  python giveaways.py login")
         sys.exit(1)
 
-    {"login": cmd_login, "scan": cmd_scan, "run": cmd_run}[args.cmd](args)
+    {"setup": cmd_setup, "login": cmd_login,
+     "scan": cmd_scan, "run": cmd_run}[args.cmd](args)
 
 
 if __name__ == "__main__":

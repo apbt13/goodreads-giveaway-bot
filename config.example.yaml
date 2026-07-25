@@ -1,0 +1,42 @@
+# ===========================================================================
+# Goodreads giveaway auto-enter — your settings.
+# Written by `python giveaways.py setup` (or your AI agent). Hand-edit anytime.
+# ===========================================================================
+
+# This tool enters PRINT giveaways only (mailed physical books). Your Goodreads
+# account needs a saved US shipping address. Kindle giveaways use a different
+# entry flow (Amazon account linking) and are skipped automatically.
+
+# Genres you WANT to enter. A giveaway matches if any of its Goodreads genre
+# tags contains any term below (case-insensitive substring — "fantasy" also
+# matches "Epic Fantasy"). Leave the list EMPTY to enter EVERY genre.
+include_genres: []
+
+# Optional veto: skip a giveaway if any term appears in its title, blurb, or
+# genre tags — even if it matched above. Leave empty to disable.
+exclude_keywords: []
+
+scan:
+  # Listing page(s) to pull candidates from. `?sort=ending_soon` is the only
+  # sort that pages through the FULL pool (others plateau at ~170), and it
+  # enters soonest-closing giveaways first.
+  start_urls:
+    - https://www.goodreads.com/giveaway?sort=ending_soon
+  max_clicks: 60        # ~15 giveaways per "Show more" click
+  max_giveaways: 2000   # hard cap on candidates collected per run
+
+pacing:
+  # Random human-like delay (seconds) between page loads / clicks. Keep it slow:
+  # it's politer and less likely to be flagged as a bot.
+  min_seconds: 4
+  max_seconds: 11
+
+run:
+  # false = DRY RUN (finds the Enter button, never clicks). Flip to true only
+  # after you've watched a dry run pick correctly. `--live` overrides this.
+  live: false
+
+  # Max NEW entries per session (already-entered books don't count). 999 is the
+  # recommended default - effectively "enter everything available this session".
+  # Lower it while you build trust; a `--limit N` flag overrides it.
+  max_per_sweep: 999
