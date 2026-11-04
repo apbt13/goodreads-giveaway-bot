@@ -315,6 +315,40 @@ def find_enter_button(page):
     return None
 
 
+# The entry form gates its submit button behind every required checkbox:
+#   submitButton.disabled = !(termsChecked && ageOk)
+# Goodreads added the age-attestation box in Oct 2026. Ticking only the terms
+# box left the submit disabled, and clicking a disabled element just burns the
+# full Playwright timeout -- which is how a broken sweep still took six hours
+# and entered nothing. Each entry is (label, preferred selector, fallback).
+GATE_BOXES = (
+    ("terms", "#termsCheckBox", "input[name='entry_terms']"),
+    ("age attestation", "#ageAttestationCheckBox", "input[name='age_attestation']"),
+)
+
+
+def _tick_gate_boxes(page):
+    """Tick every required entry checkbox present. Returns the ones that failed.
+
+    Boxes absent from the form are skipped, not an error: Goodreads varies the
+    form by giveaway type, and their own gate treats a missing box as satisfied.
+    Only these boxes are ever touched -- never the favorite-genre preferences.
+    """
+    missed = []
+    for label, primary, fallback in GATE_BOXES:
+        box = page.locator(primary)
+        if box.count() == 0:
+            box = page.locator(fallback)
+        if box.count() == 0:
+            continue
+        try:
+            if not box.first.is_checked():
+                box.first.check()
+        except Exception as e:
+            missed.append(f"{label} ({type(e).__name__})")
+    return missed
+
+
 def enter_giveaway(page, cfg, dry_run):
     """Attempt to enter the giveaway currently loaded. Returns (status, note).
 
@@ -373,21 +407,22 @@ def _submit_entry(page, cfg):
         pick.first.click(no_wait_after=True)
         _settle(page)
 
-    # Step: terms page -> tick terms, submit
-    terms = page.locator("#termsCheckBox")
-    if terms.count() == 0:
-        terms = page.locator("input[name='entry_terms']")
-    try:
-        if terms.count() and not terms.first.is_checked():
-            terms.first.check()
-    except Exception as e:
-        return "maybe", f"couldn't tick terms box: {e}"
+    # Step: terms page -> tick every required box, submit
+    missed = _tick_gate_boxes(page)
+    if missed:
+        return "maybe", f"couldn't tick {', '.join(missed)}"
 
     submit = page.locator("input[type='submit'][value*='Enter' i]")
     if submit.count() == 0:
         submit = page.get_by_role("button", name=re.compile(r"enter giveaway", re.I))
     if submit.count() == 0:
         return "maybe", f"no final submit on {page.url}"
+
+    # A still-disabled submit means the form grew a required control we don't
+    # know about. Say so immediately rather than letting click() wait out its
+    # 30s timeout once per giveaway.
+    if not submit.first.is_enabled():
+        return "gated", f"submit still disabled after ticking boxes on {page.url}"
 
     human_pause(cfg)
     submit.first.click(no_wait_after=True)
